@@ -5,7 +5,7 @@ import "net/http"
 // Routable 可路由的
 type Routable interface {
 	// Route 设定一个路由，命中该路由的会执行handlerFunc的代码
-	Route(method string, pattern string, handlerFunc handlerFunc)
+	Route(method string, pattern string, handlerFunc handlerFunc) error
 }
 
 // Server 是http server 的顶级抽象
@@ -23,16 +23,17 @@ type sdkHttpServer struct {
 	root    Filter
 }
 
-func (s *sdkHttpServer) Route(method string, pattern string, handlerFunc handlerFunc) {
-	s.handler.Route(method, pattern, handlerFunc)
+func (s *sdkHttpServer) Route(method string, pattern string, handlerFunc handlerFunc) error {
+	return s.handler.Route(method, pattern, handlerFunc)
 }
 
 func (s *sdkHttpServer) Start(address string) error {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		ctx := NewContext(w, r)
-		s.root(ctx)
-	})
-	return http.ListenAndServe(address, nil)
+	return http.ListenAndServe(address, s)
+}
+
+func (s *sdkHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := NewContext(w, r)
+	s.root(ctx)
 }
 
 func NewSdkHttpServer(name string, builders ...FilterBuilder) Server {

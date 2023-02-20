@@ -28,9 +28,10 @@ func (h *HandlerBasedOnMap) ServeHTTP(c *Context) {
 }
 
 func (h *HandlerBasedOnMap) Route(method string, pattern string,
-	handlerFunc handlerFunc) {
+	handlerFunc handlerFunc) error {
 	key := h.key(method, pattern)
 	h.handlers.Store(key, handlerFunc)
+	return nil
 }
 
 func (h *HandlerBasedOnMap) key(method string,
