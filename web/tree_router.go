@@ -3,42 +3,55 @@ package web
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 )
 
 var ErrorInvalidRouterPattern = errors.New("invalid router pattern")
+var ErrorInvalidMethod = errors.New("invalid method")
 
 type HandlerBasedOnTree struct {
-	root *node
+	forest map[string]*node
+}
+
+var supportMethods = [4]string{
+	http.MethodGet,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodDelete,
 }
 
 func NewHandlerBasedOnTree() Handler {
+	forest := make(map[string]*node, len(supportMethods))
+	for _, m := range supportMethods {
+		forest[m] = newRootNode(m)
+	}
 	return &HandlerBasedOnTree{
-		root: &node{},
+		forest: forest,
 	}
 }
 
 // ServerHTTP 就是从树里面找节点
 // 找到了就执行
 func (h *HandlerBasedOnTree) ServeHTTP(ctx *Context) {
-	handler, ok := h.findRouter(ctx.R.URL.Path)
+	handler, ok := h.findRouter(ctx, ctx.R.Method, ctx.R.URL.Path)
 	if !ok {
 		ctx.W.WriteHeader(http.StatusNotFound)
-		ctx.W.Write([]byte("Not Found"))
+		_, _ = ctx.W.Write([]byte("Not Found"))
 		return
 	}
 	handler(ctx)
 }
 
-func (h *HandlerBasedOnTree) findRouter(pattern string) (handlerFunc, bool) {
+func (h *HandlerBasedOnTree) findRouter(ctx *Context, method string, pattern string) (handlerFunc, bool) {
 	// 去掉头尾可能有的/，然后按照/切割成段
 	pattern = strings.Trim(pattern, "/")
 	paths := strings.Split(pattern, "/")
-	cur := h.root
+	cur := h.forest[method]
 
 	for _, path := range paths {
 		// 从子节点里边找一个到了当前 path 的节点
-		matchNode, ok := h.findMatchChild(cur, path)
+		matchNode, ok := h.findMatchChild(ctx, cur, path)
 		if !ok {
 			return nil, false
 		}
@@ -61,11 +74,16 @@ func (h *HandlerBasedOnTree) Route(method string, pattern string, handlerFund ha
 	pattern = strings.Trim(pattern, "/")
 	paths := strings.Split(pattern, "/")
 	// 当前指向根节点
-	cur := h.root
+	cur, ok := h.forest[method]
+	if !ok {
+		return ErrorInvalidMethod
+	}
 	for index, path := range paths {
 		// 从子节点里边找一个匹配到了当前 path 的节点
-		matchChild, ok := h.findMatchChild(cur, path)
-		if ok {
+		matchChild, found := h.findMatchChild(nil, cur, path)
+		// != nodeTypeAny 是考虑到 /order/* 和 /order/:id 这种注册顺序
+		// todo matchChild.nodeType != nodeTypeParam
+		if found && matchChild.nodeType != nodeTypeAny {
 			cur = matchChild
 		} else {
 			// 为当前节点根据
@@ -98,21 +116,25 @@ func (h *HandlerBasedOnTree) validatePattern(pattern string) error {
 	return nil
 }
 
-func (h *HandlerBasedOnTree) findMatchChild(root *node, path string) (*node, bool) {
-	var wildcardNode *node
+func (h *HandlerBasedOnTree) findMatchChild(ctx *Context, root *node, path string) (*node, bool) {
+	candidates := make([]*node, 0, 2)
 	for _, child := range root.children {
-		// 并不是 * 的节点命中了，直接返回
-		// != * 是为了防止用户乱输入
-		if child.path == path && child.path != "*" {
-			return child, true
-		}
-		// 命中了通配符的，我们看看后面还有没有更加详细的
-		if child.path == "*" {
-			wildcardNode = child
+		if child.matchFunc(ctx, path) {
+			candidates = append(candidates, child)
 		}
 	}
 
-	return wildcardNode, wildcardNode != nil
+	if len(candidates) == 0 {
+		return nil, false
+	}
+
+	// /user/*
+	// /user/home
+	// type 也决定了它们的优先级
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].nodeType < candidates[j].nodeType
+	})
+	return candidates[len(candidates)-1], true
 }
 
 func (h *HandlerBasedOnTree) createSubTree(root *node, paths []string, handlerFunc handlerFunc) {
@@ -123,19 +145,4 @@ func (h *HandlerBasedOnTree) createSubTree(root *node, paths []string, handlerFu
 		cur = n
 	}
 	cur.handler = handlerFunc
-}
-
-type node struct {
-	path     string
-	children []*node
-
-	// 如果这是叶子节点
-	// 那么匹配上之后就可以调用之该方法
-	handler handlerFunc
-}
-
-func newNode(path string) *node {
-	return &node{
-		path: path,
-	}
 }
