@@ -1,6 +1,12 @@
 package web
 
-import "net/http"
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
 
 // Routable 可路由的
 type Routable interface {
@@ -13,6 +19,8 @@ type Server interface {
 	Routable
 	// Start 启动我们的服务器
 	Start(address string) error
+
+	Shutdown(ctx context.Context) error
 }
 
 // sdkHttpServer 这个是基于 net/http 这个包实现的 http server
@@ -21,6 +29,8 @@ type sdkHttpServer struct {
 	Name    string
 	handler Handler
 	root    Filter
+	// 我们在server维度池化
+	ctxPool sync.Pool
 }
 
 func (s *sdkHttpServer) Route(method string, pattern string, handlerFunc handlerFunc) error {
@@ -32,8 +42,21 @@ func (s *sdkHttpServer) Start(address string) error {
 }
 
 func (s *sdkHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := NewContext(w, r)
+	ctx := s.ctxPool.Get().(*Context)
+	defer func() {
+		s.ctxPool.Put(ctx)
+	}()
+	ctx.Reset(w, r)
 	s.root(ctx)
+}
+
+func (s *sdkHttpServer) Shutdown(ctx context.Context) error {
+	// 因为我们这个简单的框架，没有什么要清理的，
+	// 所以我们 sleep 一下来模拟这个过程
+	fmt.Printf("%s shutdown...\n", s.Name)
+	time.Sleep(time.Second)
+	fmt.Printf("%s shutdown!!!\n", s.Name)
+	return nil
 }
 
 func NewSdkHttpServer(name string, builders ...FilterBuilder) Server {
@@ -51,5 +74,19 @@ func NewSdkHttpServer(name string, builders ...FilterBuilder) Server {
 		Name:    name,
 		handler: handler,
 		root:    root,
+		ctxPool: sync.Pool{New: func() any {
+			return newContext()
+		}},
 	}
+}
+
+func NewSdkHttpHttpServerWithFilterNames(name string, filterNames ...string) Server {
+	// 这里取出来
+	builders := make([]FilterBuilder, 0, len(filterNames))
+	for _, n := range filterNames {
+		b := GetFilterBuilder(n)
+		builders = append(builders, b)
+	}
+
+	return NewSdkHttpServer(name, builders...)
 }

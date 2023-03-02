@@ -133,3 +133,15 @@ func TestHandlerBasedOnTree_Route(t *testing.T) {
 func handlerFuncEquals(hf1 handlerFunc, hf2 handlerFunc) bool {
 	return reflect.ValueOf(hf1).Pointer() == reflect.ValueOf(hf2).Pointer()
 }
+
+type user struct {
+	Name  string
+	Email string
+}
+
+// 一般来说，复用对象都要求我们取出来之后，
+// 重置里面的字段
+func (u *user) Reset(name string, email string) {
+	u.Email = email
+	u.Name = name
+}
